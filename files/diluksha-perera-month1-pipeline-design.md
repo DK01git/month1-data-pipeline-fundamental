@@ -18,8 +18,7 @@ loading aggregated fact data to a curated layer for reporting.
 | Source File | Staging Table | Curated Table |
 |---|---|---|
 | sales_transactions.csv | staging.sales_transactions | curated.fact_daily_sales |
-| product_catalog.csv | staging.product_catalog | Lookup only |
-| store_locations.csv | staging.store_locations | Lookup only |
+|      |
 
 ---
 
