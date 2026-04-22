@@ -1,0 +1,61 @@
+{
+  "data_asset_type": null,
+  "expectation_suite_name": "staging_sales_suite",
+  "expectations": [
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": { "min_value": 100, "max_value": 50000 },
+      "meta": { "notes": "Staging must have between 100 and 50000 rows" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "store_id" },
+      "meta": { "notes": "Every transaction must have a store" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "product_id" },
+      "meta": { "notes": "Every transaction must have a product" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "transaction_date" },
+      "meta": { "notes": "Every transaction must have a date" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": { "column": "unit_price", "min_value": -1000, "max_value": 1000000 },
+      "meta": { "notes": "Unit price range check — negative allowed as bad rows exist in staging" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "payment_method",
+        "value_set": ["CARD", "CASH", "DIGITAL_WALLET", "CREDIT"]
+      },
+      "meta": { "notes": "Only known payment methods allowed" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_regex",
+      "kwargs": {
+        "column": "store_id",
+        "regex": "^STR\\d{3}$",
+        "mostly": 0.95
+      },
+      "meta": { "notes": "Store IDs must match STR### format — 95% threshold allows bad rows" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_regex",
+      "kwargs": {
+        "column": "product_id",
+        "regex": "^PRD\\d{4}$",
+        "mostly": 0.95
+      },
+      "meta": { "notes": "Product IDs must match PRD#### format" }
+    }
+  ],
+  "ge_cloud_id": null,
+  "meta": {
+    "great_expectations_version": "0.18.19"
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "data_asset_type": null,
+  "expectation_suite_name": "curated_sales_suite",
+  "expectations": [
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": { "min_value": 100, "max_value": 20000 },
+      "meta": {
+        "notes": "Curated must have between 100 and 20000 aggregated rows"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "store_id" },
+      "meta": { "notes": "Every curated row must have a store" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "product_id" },
+      "meta": { "notes": "Every curated row must have a product" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "category" },
+      "meta": {
+        "notes": "Every curated row must have a category — enrichment must succeed"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "total_revenue",
+        "min_value": 0,
+        "max_value": 100000000
+      },
+      "meta": { "notes": "Revenue must be positive after transformation" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "total_quantity",
+        "min_value": 1,
+        "max_value": 10000
+      },
+      "meta": { "notes": "Aggregated quantity must be at least 1" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "transaction_count",
+        "min_value": 1,
+        "max_value": 10000
+      },
+      "meta": { "notes": "At least 1 transaction per aggregated row" }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "category",
+        "value_set": ["Electronics", "Clothing", "Food", "Home", "Health"]
+      },
+      "meta": { "notes": "Only known categories in curated layer" }
+    },
+    {
+      "expectation_type": "expect_column_pair_values_A_to_be_greater_than_B",
+      "kwargs": {
+        "column_A": "total_revenue",
+        "column_B": "total_tax",
+        "or_equal": false
+      },
+      "meta": { "notes": "Revenue must always exceed tax" }
+    }
+  ],
+  "ge_cloud_id": null,
+  "meta": {
+    "great_expectations_version": "0.18.19"
+  }
+}

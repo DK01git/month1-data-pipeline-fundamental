@@ -25,6 +25,8 @@ from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.providers.http.hooks.http import HttpHook
+import great_expectations as gx
+from great_expectations.core.batch import BatchRequest
 
 log = logging.getLogger(__name__)
 
@@ -486,6 +488,146 @@ def archive_source_files(**context):
 
 
 # =============================================================
+# GX CHECKPOINT 1 — Validate staging.sales_transactions
+# Runs after ingest_to_staging, before transform_sales
+# Validates: row count, nulls, formats, payment methods
+# =============================================================
+def validate_staging(**context):
+    """
+    Great Expectations validation on staging.sales_transactions.
+    Checkpoint 1 of 3 in the data quality framework.
+    Catches: wrong schema, missing columns, invalid values,
+             format violations from inconsistent POS systems.
+    """
+    run_date = context["data_interval_start"].strftime("%Y-%m-%d")
+    log.info("Running GX validation on staging.sales_transactions")
+
+    try:
+        context_gx = gx.get_context(
+            context_root_dir="/opt/airflow/great_expectations"
+        )
+
+        batch_request = BatchRequest(
+            datasource_name="retail_postgres",
+            data_connector_name="default_inferred_data_connector_name",
+            data_asset_name="staging.sales_transactions",
+        )
+
+        validator = context_gx.get_validator(
+            batch_request=batch_request,
+            expectation_suite_name="staging_sales_suite",
+        )
+
+        results = validator.validate()
+
+        # Build summary
+        total       = results["statistics"]["evaluated_expectations"]
+        successful  = results["statistics"]["successful_expectations"]
+        failed      = results["statistics"]["unsuccessful_expectations"]
+
+        log.info(
+            "GX staging validation: %d/%d expectations passed",
+            successful, total
+        )
+
+        if not results["success"]:
+            failed_expectations = [
+                r["expectation_config"]["expectation_type"]
+                for r in results["results"]
+                if not r["success"]
+            ]
+            raise AirflowException(
+                f"GX staging validation FAILED on run_date={run_date}. "
+                f"Failed expectations: {failed_expectations}. "
+                f"Check Data Docs for details."
+            )
+
+        log.info("GX staging validation PASSED — all %d expectations met", total)
+
+    except AirflowException:
+        raise
+    except Exception as e:
+        log.error("GX staging validation error: %s", str(e))
+        raise AirflowException(f"GX validation failed: {str(e)}")
+
+
+# =============================================================
+# GX CHECKPOINT 2 — Validate curated.fact_daily_sales
+# Runs after load_curated, before archive_source_files
+# Validates: revenue positive, categories valid, no nulls,
+#            revenue > tax, transaction counts valid
+# =============================================================
+def validate_curated(**context):
+    """
+    Great Expectations validation on curated.fact_daily_sales.
+    Checkpoint 2 of 3 in the data quality framework.
+    Catches: transformation errors, aggregation bugs,
+             missing enrichment, negative revenue.
+    """
+    run_date = context["data_interval_start"].strftime("%Y-%m-%d")
+    log.info("Running GX validation on curated.fact_daily_sales")
+
+    try:
+        context_gx = gx.get_context(
+            context_root_dir="/opt/airflow/great_expectations"
+        )
+
+        batch_request = BatchRequest(
+            datasource_name="retail_postgres",
+            data_connector_name="default_inferred_data_connector_name",
+            data_asset_name="curated.fact_daily_sales",
+        )
+
+        validator = context_gx.get_validator(
+            batch_request=batch_request,
+            expectation_suite_name="curated_sales_suite",
+        )
+
+        results = validator.validate()
+
+        total      = results["statistics"]["evaluated_expectations"]
+        successful = results["statistics"]["successful_expectations"]
+        failed     = results["statistics"]["unsuccessful_expectations"]
+
+        log.info(
+            "GX curated validation: %d/%d expectations passed",
+            successful, total
+        )
+
+        if not results["success"]:
+            failed_expectations = [
+                r["expectation_config"]["expectation_type"]
+                for r in results["results"]
+                if not r["success"]
+            ]
+            raise AirflowException(
+                f"GX curated validation FAILED on run_date={run_date}. "
+                f"Failed expectations: {failed_expectations}. "
+                f"Check Data Docs for details."
+            )
+
+        log.info("GX curated validation PASSED — all %d expectations met", total)
+
+    except AirflowException:
+        raise
+    except Exception as e:
+        log.error("GX curated validation error: %s", str(e))
+        raise AirflowException(f"GX validation failed: {str(e)}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# =============================================================
 # TASK 6 — NOTIFICATION: success/failure summary
 # Challenge File, Part 2: "send_notification | PythonOperator
 #   | Send success/failure notification"
@@ -694,6 +836,35 @@ with DAG(
         on_failure_callback=send_failure_alert,
     )
 
+
+# ----------------------------------------------------------
+    # GX1 — Validate staging after ingestion
+    # Runs between ingest_to_staging and transform_sales
+    # ----------------------------------------------------------
+    validate_staging_task = PythonOperator(
+        task_id        ="validate_staging",
+        python_callable=validate_staging,
+        retries        =1,
+        retry_delay    =timedelta(seconds=30),
+        on_failure_callback=send_failure_alert,
+    )
+
+    # ----------------------------------------------------------
+    # GX2 — Validate curated after load
+    # Runs between load_curated and archive_source_files
+    # ----------------------------------------------------------
+    validate_curated_task = PythonOperator(
+        task_id        ="validate_curated",
+        python_callable=validate_curated,
+        retries        =1,
+        retry_delay    =timedelta(seconds=30),
+        on_failure_callback=send_failure_alert,
+    )
+
+
+
+
+
     # ----------------------------------------------------------
     # T6 — Archive source files
     # ----------------------------------------------------------
@@ -722,7 +893,9 @@ with DAG(
     # Challenge File, Sample Diagram: full dependency map
     # ==========================================================
     check_files_exist >> branch_task
-    branch_task >> [ingest_task, alert_task]
-    ingest_task >> transform_task >> load_curated >> archive_task
-    archive_task >> notify_task
-    alert_task  >> notify_task
+    branch_task       >> [ingest_task, alert_task]
+    ingest_task       >> validate_staging_task >> transform_task
+    transform_task    >> load_curated >> validate_curated_task
+    validate_curated_task >> archive_task
+    archive_task      >> notify_task
+    alert_task        >> notify_task

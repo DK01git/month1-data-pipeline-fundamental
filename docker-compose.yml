@@ -10,9 +10,10 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
     _PIP_ADDITIONAL_REQUIREMENTS: >
-      apache-airflow-providers-amazon
-      apache-airflow-providers-postgres
-      pandas
+        apache-airflow-providers-amazon
+        apache-airflow-providers-postgres
+        pandas
+        great-expectations==0.18.19
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
