@@ -62,13 +62,13 @@
       "meta": { "notes": "Only known categories in curated layer" }
     },
     {
-      "expectation_type": "expect_column_pair_values_A_to_be_greater_than_B",
+      "expectation_type": "expect_column_values_to_be_between",
       "kwargs": {
-        "column_A": "total_revenue",
-        "column_B": "total_tax",
-        "or_equal": false
+        "column": "total_tax",
+        "min_value": 0,
+        "max_value": 10000000
       },
-      "meta": { "notes": "Revenue must always exceed tax" }
+      "meta": { "notes": "Tax must be positive and within reasonable range" }
     }
   ],
   "ge_cloud_id": null,

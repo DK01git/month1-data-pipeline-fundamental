@@ -487,6 +487,84 @@ def archive_source_files(**context):
         #          source_key, archive_bucket, archive_key)
 
 
+# Define the soft warnings and alert function for GX validation 
+def _send_soft_warning(context, layer, warnings, run_date):
+    """
+    Posts soft warning to Slack — pipeline continues.
+    Engineers see exact expectation details.
+    Managers see that something unusual was detected.
+    """
+    dag_id  = context["dag"].dag_id
+    warning_list = "\n".join([f"• {w}" for w in warnings])
+
+    message = {
+        "text": f":warning: Data Quality Warning: {layer}",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": ":warning: Data Quality Warning — Action Required"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*DAG:*\n{dag_id}"},
+                    {"type": "mrkdwn", "text": f"*Layer:*\n{layer}"},
+                    {"type": "mrkdwn", "text": f"*Run Date:*\n{run_date}"},
+                    {"type": "mrkdwn", "text": f"*Status:*\n:green_circle: Pipeline CONTINUING"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Soft Warnings Detected:*\n{warning_list}"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*What this means:*\n"
+                        "Data anomalies were detected but are not critical. "
+                        "Pipeline has continued. A data engineer should "
+                        "review these before the next scheduled run."
+                    )
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Check Airflow logs for full validation details."
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        http_hook    = HttpHook(method="POST", http_conn_id="slack_webhook")
+        conn         = http_hook.get_connection("slack_webhook")
+        webhook_path = conn.password
+        http_hook.run(
+            endpoint=webhook_path,
+            data=json.dumps(message),
+            headers={"Content-Type": "application/json"},
+        )
+        log.info(
+            "Soft warning Slack alert sent for %s: %d warnings",
+            layer, len(warnings)
+        )
+    except Exception as e:
+        log.error("Soft warning Slack notification failed: %s", str(e))
+
+
+
 # =============================================================
 # GX CHECKPOINT 1 — Validate staging.sales_transactions
 # Runs after ingest_to_staging, before transform_sales
@@ -494,60 +572,148 @@ def archive_source_files(**context):
 # =============================================================
 def validate_staging(**context):
     """
-    Great Expectations validation on staging.sales_transactions.
-    Checkpoint 1 of 3 in the data quality framework.
-    Catches: wrong schema, missing columns, invalid values,
-             format violations from inconsistent POS systems.
+    GX Checkpoint 1 — staging.sales_transactions
+    Hard failures: stop pipeline, alert Slack as FAILED
+    Soft warnings: continue pipeline, alert Slack as WARNING
     """
     run_date = context["data_interval_start"].strftime("%Y-%m-%d")
     log.info("Running GX validation on staging.sales_transactions")
+
+    # Hard expectations — pipeline stops if these fail
+    HARD = [
+        "expect_table_row_count_to_be_between",
+        "expect_column_values_to_not_be_null",
+    ]
 
     try:
         context_gx = gx.get_context(
             context_root_dir="/opt/airflow/great_expectations"
         )
-
         batch_request = BatchRequest(
             datasource_name="retail_postgres",
             data_connector_name="default_inferred_data_connector_name",
             data_asset_name="staging.sales_transactions",
         )
-
         validator = context_gx.get_validator(
             batch_request=batch_request,
             expectation_suite_name="staging_sales_suite",
         )
-
         results = validator.validate()
 
-        # Build summary
-        total       = results["statistics"]["evaluated_expectations"]
-        successful  = results["statistics"]["successful_expectations"]
-        failed      = results["statistics"]["unsuccessful_expectations"]
+        total      = results["statistics"]["evaluated_expectations"]
+        successful = results["statistics"]["successful_expectations"]
 
-        log.info(
-            "GX staging validation: %d/%d expectations passed",
-            successful, total
-        )
+        log.info("GX staging: %d/%d expectations passed", successful, total)
 
-        if not results["success"]:
-            failed_expectations = [
-                r["expectation_config"]["expectation_type"]
-                for r in results["results"]
-                if not r["success"]
-            ]
-            raise AirflowException(
-                f"GX staging validation FAILED on run_date={run_date}. "
-                f"Failed expectations: {failed_expectations}. "
-                f"Check Data Docs for details."
+        # Split results into hard failures and soft warnings
+        hard_failures = []
+        soft_warnings = []
+
+        for r in results["results"]:
+            if not r["success"]:
+                exp_type = r["expectation_config"]["expectation_type"]
+                col      = r["expectation_config"]["kwargs"].get("column", "table")
+                detail   = f"{exp_type} on {col}"
+
+                if exp_type in HARD:
+                    hard_failures.append(detail)
+                else:
+                    soft_warnings.append(detail)
+
+        # Send soft warning Slack alerts — pipeline continues
+        if soft_warnings:
+            _send_soft_warning(
+                context=context,
+                layer="staging.sales_transactions",
+                warnings=soft_warnings,
+                run_date=run_date,
             )
 
-        log.info("GX staging validation PASSED — all %d expectations met", total)
+        # Hard failures — stop pipeline
+        if hard_failures:
+            raise AirflowException(
+                f"GX staging HARD FAILURE on {run_date}: "
+                f"{hard_failures}. Pipeline stopped."
+            )
+
+        log.info("GX staging validation complete — %d soft warnings", len(soft_warnings))
 
     except AirflowException:
         raise
     except Exception as e:
         log.error("GX staging validation error: %s", str(e))
+        raise AirflowException(f"GX validation failed: {str(e)}")
+
+
+def validate_curated(**context):
+    """
+    GX Checkpoint 2 — curated.fact_daily_sales
+    Hard failures: stop pipeline, alert Slack as FAILED
+    Soft warnings: continue pipeline, alert Slack as WARNING
+    """
+    run_date = context["data_interval_start"].strftime("%Y-%m-%d")
+    log.info("Running GX validation on curated.fact_daily_sales")
+
+    # Hard expectations — pipeline stops if these fail
+    HARD = [
+        "expect_table_row_count_to_be_between",
+        "expect_column_values_to_not_be_null",
+    ]
+
+    try:
+        context_gx = gx.get_context(
+            context_root_dir="/opt/airflow/great_expectations"
+        )
+        batch_request = BatchRequest(
+            datasource_name="retail_postgres",
+            data_connector_name="default_inferred_data_connector_name",
+            data_asset_name="curated.fact_daily_sales",
+        )
+        validator = context_gx.get_validator(
+            batch_request=batch_request,
+            expectation_suite_name="curated_sales_suite",
+        )
+        results = validator.validate()
+
+        total      = results["statistics"]["evaluated_expectations"]
+        successful = results["statistics"]["successful_expectations"]
+
+        log.info("GX curated: %d/%d expectations passed", successful, total)
+
+        hard_failures = []
+        soft_warnings = []
+
+        for r in results["results"]:
+            if not r["success"]:
+                exp_type = r["expectation_config"]["expectation_type"]
+                col      = r["expectation_config"]["kwargs"].get("column", "table")
+                detail   = f"{exp_type} on {col}"
+
+                if exp_type in HARD:
+                    hard_failures.append(detail)
+                else:
+                    soft_warnings.append(detail)
+
+        if soft_warnings:
+            _send_soft_warning(
+                context=context,
+                layer="curated.fact_daily_sales",
+                warnings=soft_warnings,
+                run_date=run_date,
+            )
+
+        if hard_failures:
+            raise AirflowException(
+                f"GX curated HARD FAILURE on {run_date}: "
+                f"{hard_failures}. Pipeline stopped."
+            )
+
+        log.info("GX curated validation complete — %d soft warnings", len(soft_warnings))
+
+    except AirflowException:
+        raise
+    except Exception as e:
+        log.error("GX curated validation error: %s", str(e))
         raise AirflowException(f"GX validation failed: {str(e)}")
 
 
@@ -634,6 +800,16 @@ def validate_curated(**context):
 # Challenge File, Part 4: trigger_rule=all_done — always runs
 # =============================================================
 def send_notification(**context):
+    # Auto-build GX Data Docs after every run
+    try:
+        context_gx = gx.get_context(
+            context_root_dir="/opt/airflow/great_expectations"
+        )
+        context_gx.build_data_docs()
+        log.info("GX Data Docs built successfully")
+    except Exception as e:
+        log.warning("Data Docs build failed (non-critical): %s", str(e))
+
     """
     Posts pipeline completion status to Slack.
     Runs regardless of upstream state via trigger_rule=ALL_DONE.

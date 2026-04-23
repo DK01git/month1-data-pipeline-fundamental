@@ -29,8 +29,8 @@ import numpy as np
 # Config
 # ---------------------------------------------------
 # Dynamic date — always yesterday to match Airflow data_interval_start
-RUN_DATE = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-# RUN_DATE = "2026-04-19"
+# RUN_DATE = (date.today() - timedelta(days=2)).strftime("%Y-%m-%d")
+RUN_DATE = "2026-04-21"
 BUCKET   = "raw-data"
 ENDPOINT = "http://localhost:9000"
 
